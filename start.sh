@@ -2,4 +2,4 @@
 #!/bin/bash
 
 # Start the Python MCP server
-python server.py
+python new_server.py
