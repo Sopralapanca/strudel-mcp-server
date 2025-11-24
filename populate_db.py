@@ -1,6 +1,6 @@
 import os
 import re
-from pathlib import Path
+from server import generate_embedding
 from dotenv import load_dotenv
 from supabase import create_client, Client
 from sentence_transformers import SentenceTransformer
@@ -14,22 +14,6 @@ if not url or not key:
     raise ValueError("SUPABASE_URL and SUPABASE_KEY must be set in environment variables.")
 
 supabase: Client = create_client(url, key)
-
-# Initialize local embedding model
-print('Loading embedding model...')
-# Using BAAI/bge-small-en-v1.5 as requested
-model = SentenceTransformer('BAAI/bge-small-en-v1.5')
-print('Model loaded successfully!')
-
-def generate_embedding(text: str) -> list:
-    """
-    Generate embedding using local model.
-    normalize_embeddings=True is equivalent to { normalize: true } in JS
-    """
-    # Note: For BGE models, it is often recommended to prepend "Represent this sentence for searching relevant passages: " 
-    # to the query, but not the documents. For strict porting, we leave it as raw text here.
-    embedding = model.encode(text, normalize_embeddings=True)
-    return embedding.tolist()
 
 def chunk_documentation(markdown_text: str) -> list:
     """Split documentation into meaningful chunks"""

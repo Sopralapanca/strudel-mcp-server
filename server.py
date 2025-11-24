@@ -151,7 +151,7 @@ def process_mcp_message(message):
                         'match_documents',
                         {
                             'query_embedding': query_embedding,
-                            'match_threshold': 0.7,
+                            'match_threshold': 0.2,
                             'match_count': max_results
                         }
                     ).execute()
