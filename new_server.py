@@ -151,7 +151,7 @@ def process_mcp_message(message):
                         'match_documents',
                         {
                             'query_embedding': query_embedding,
-                            'match_threshold': 0.6,
+                            'match_threshold': 0.2,
                             'match_count': max_results
                         }
                     ).execute()
@@ -166,6 +166,7 @@ def process_mcp_message(message):
                                 f"{doc['content']}\n"
                             )
                         result_text = "\n".join(results)
+                        print(f"Search results:\n{result_text}")
 
                     response = {
                         "jsonrpc": "2.0",
