@@ -1,11 +1,11 @@
 import os
 import json
+import uuid
 import requests
 from supabase import create_client, Client
 from flask import Flask, Response, jsonify, request, stream_with_context
 from flask_cors import CORS
 from dotenv import load_dotenv
-import time
 
 load_dotenv()
 
@@ -94,15 +94,63 @@ TOOLS = [
     }
 ]
 
-def process_mcp_message(message):
-    """Process an MCP JSON-RPC message"""
+def send_sse_message(data):
+    """Format data as SSE message"""
+    return f"data: {json.dumps(data)}\n\n"
+
+@flask_app.route('/')
+def home():
+    """Root endpoint"""
+    return jsonify({
+        "status": "ok",
+        "service": "Strudel MCP Server",
+        "protocol": "MCP with SSE",
+        "version": "1.0.0"
+    }), 200
+
+@flask_app.route('/health')
+def health():
+    """Health check"""
+    return jsonify({'status': 'healthy'}), 200
+
+@flask_app.route('/sse', methods=['GET', 'POST'])
+def sse_endpoint():
+    """SSE endpoint for MCP protocol"""
+    
+    def generate():
+        # Send endpoint event first (required by MCP spec)
+        yield f"event: endpoint\ndata: /message\n\n"
+        
+        # Keep connection alive
+        while True:
+            yield f": keepalive\n\n"
+            import time
+            time.sleep(30)
+    
+    return Response(
+        stream_with_context(generate()),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',
+            'Connection': 'keep-alive'
+        }
+    )
+
+@flask_app.route('/message', methods=['POST'])
+def message_endpoint():
+    """Handle MCP messages"""
     try:
+        if not request.is_json:
+            return jsonify({'error': 'Content-Type must be application/json'}), 400
+        
+        message = request.get_json()
         method = message.get('method')
         params = message.get('params', {})
         msg_id = message.get('id')
-
+        
         print(f"Received MCP message: {method}")
-
+        
         # Handle initialize
         if method == 'initialize':
             response = {
@@ -110,8 +158,8 @@ def process_mcp_message(message):
                 "id": msg_id,
                 "result": SERVER_INFO
             }
-            return response, 200
-
+            return jsonify(response), 200
+        
         # Handle tools/list
         elif method == 'tools/list':
             response = {
@@ -121,31 +169,31 @@ def process_mcp_message(message):
                     "tools": TOOLS
                 }
             }
-            return response, 200
-
+            return jsonify(response), 200
+        
         # Handle tools/call
         elif method == 'tools/call':
             tool_name = params.get('name')
             arguments = params.get('arguments', {})
-
+            
             if tool_name == 'search_strudel_docs':
                 query = arguments.get('query')
                 max_results = arguments.get('maxResults', 3)
-
+                
                 if not query:
-                    return {
+                    return jsonify({
                         "jsonrpc": "2.0",
                         "id": msg_id,
                         "error": {
                             "code": -32602,
                             "message": "Missing required argument: query"
                         }
-                    }, 400
-
+                    }), 400
+                
                 try:
                     # Generate embedding
                     query_embedding = generate_embedding(query)
-
+                    
                     # Search database
                     db_response = supabase.rpc(
                         'match_documents',
@@ -155,7 +203,7 @@ def process_mcp_message(message):
                             'match_count': max_results
                         }
                     ).execute()
-
+                    
                     if not db_response.data:
                         result_text = "No relevant documentation found for your query."
                     else:
@@ -166,7 +214,7 @@ def process_mcp_message(message):
                                 f"{doc['content']}\n"
                             )
                         result_text = "\n".join(results)
-
+                    
                     response = {
                         "jsonrpc": "2.0",
                         "id": msg_id,
@@ -179,155 +227,56 @@ def process_mcp_message(message):
                             ]
                         }
                     }
-                    return response, 200
-
+                    return jsonify(response), 200
+                    
                 except Exception as e:
-                    return {
+                    return jsonify({
                         "jsonrpc": "2.0",
                         "id": msg_id,
                         "error": {
                             "code": -32603,
                             "message": f"Error searching documentation: {str(e)}"
                         }
-                    }, 500
+                    }), 500
             else:
-                return {
+                return jsonify({
                     "jsonrpc": "2.0",
                     "id": msg_id,
                     "error": {
                         "code": -32601,
                         "message": f"Unknown tool: {tool_name}"
                     }
-                }, 400
-
+                }), 400
+        
         # Handle notifications/initialized
         elif method == 'notifications/initialized':
-            return None, 204
-
+            # No response needed for notifications
+            return '', 204
+        
         else:
-            return {
+            return jsonify({
                 "jsonrpc": "2.0",
                 "id": msg_id,
                 "error": {
                     "code": -32601,
                     "message": f"Method not found: {method}"
                 }
-            }, 400
-
+            }), 400
+            
     except Exception as e:
         print(f"Error handling message: {e}")
-        return {
+        return jsonify({
             "jsonrpc": "2.0",
             "id": message.get('id'),
             "error": {
                 "code": -32603,
                 "message": str(e)
             }
-        }, 500
-
-@flask_app.route('/', methods=['GET', 'POST', 'HEAD'])
-def home():
-    """Root endpoint - handles GET, POST, and HEAD requests"""
-    # Handle HEAD requests (for health checks)
-    if request.method == 'HEAD':
-        return '', 200
-    
-    # Handle GET requests
-    if request.method == 'GET':
-        return jsonify({
-            "status": "ok",
-            "service": "Strudel MCP Server",
-            "protocol": "MCP with SSE",
-            "version": "1.0.0",
-            "endpoints": {
-                "sse": "/sse",
-                "message": "/message",
-                "health": "/health"
-            }
-        }), 200
-
-    # Handle POST requests (for streamable_http transport initialize)
-    if request.method == 'POST':
-        if not request.is_json:
-            return jsonify({'error': 'Content-Type must be application/json'}), 400
-
-        message = request.get_json()
-        result, status = process_mcp_message(message)
-
-        if status == 204:
-            return '', 204
-
-        return jsonify(result), status
-
-@flask_app.route('/health', methods=['GET', 'HEAD'])
-def health():
-    """Health check endpoint"""
-    if request.method == 'HEAD':
-        return '', 200
-    return jsonify({'status': 'healthy'}), 200
-
-@flask_app.route('/sse', methods=['GET'])
-def sse_endpoint():
-    """SSE endpoint for MCP protocol"""
-    def generate():
-        # Build absolute message endpoint URL
-        try:
-            # Get the actual host from request
-            scheme = request.headers.get('X-Forwarded-Proto', 'https' if request.is_secure else 'http')
-            host = request.headers.get('X-Forwarded-Host', request.host)
-            endpoint_url = f"{scheme}://{host}/message"
-        except Exception as e:
-            print(f"Error building endpoint URL: {e}")
-            endpoint_url = request.host_url.rstrip('/') + '/message'
-
-        print(f"SSE: Sending endpoint URL: {endpoint_url}")
-        
-        # Send endpoint event FIRST (this is critical for MCP)
-        yield f"event: endpoint\ndata: {endpoint_url}\n\n"
-
-        # Keep connection alive with periodic messages
-        count = 0
-        while True:
-            time.sleep(30)
-            count += 1
-            # Send keepalive comment (lines starting with : are ignored by SSE spec)
-            yield f": keepalive {count}\n\n"
-
-    return Response(
-        stream_with_context(generate()),
-        mimetype='text/event-stream',
-        headers={
-            'Cache-Control': 'no-cache',
-            'X-Accel-Buffering': 'no',
-            'Connection': 'keep-alive',
-            'Content-Type': 'text/event-stream'
-        }
-    )
-
-@flask_app.route('/message', methods=['POST', 'OPTIONS'])
-def message_endpoint():
-    """Handle MCP JSON-RPC messages"""
-    # Handle CORS preflight
-    if request.method == 'OPTIONS':
-        return '', 204
-
-    if not request.is_json:
-        return jsonify({'error': 'Content-Type must be application/json'}), 400
-
-    message = request.get_json()
-    print(f"Received message: {json.dumps(message, indent=2)}")
-    
-    result, status = process_mcp_message(message)
-
-    if status == 204:
-        return '', 204
-
-    return jsonify(result), status
+        }), 500
 
 if __name__ == "__main__":
     port = int(os.getenv('PORT', 3000))
     print(f"Starting MCP SSE server on port {port}")
-    print("SSE endpoint: /sse")
-    print("Message endpoint: /message")
-    print("Health check: /health")
+    print(f"SSE endpoint: /sse")
+    print(f"Message endpoint: /message")
     flask_app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
