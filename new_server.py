@@ -166,7 +166,8 @@ def process_mcp_message(message):
                                 f"{doc['content']}\n"
                             )
                         result_text = "\n".join(results)
-                        print(f"Search results:\n{result_text}")
+                    
+                    print(f"Search results:\n{result_text}")
 
                     response = {
                         "jsonrpc": "2.0",
